@@ -15,7 +15,7 @@ import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
 import java.io.IOException;
-import java.util.StringTokenizer;
+import java.util.*;
 
 public class OrphanPages extends Configured implements Tool {
     public static final Log LOG = LogFactory.getLog(OrphanPages.class);
@@ -45,18 +45,40 @@ public class OrphanPages extends Configured implements Tool {
     }
 
     public static class LinkCountMap extends Mapper<Object, Text, IntWritable, IntWritable> {
+
         @Override
         public void map(Object key, Text value, Context context) throws IOException, InterruptedException {
+            String line = value.toString();
+            StringTokenizer tokenizer = new StringTokenizer(line, ": ");
+            int leftPage = Integer.parseInt(tokenizer.nextToken());
+            while(tokenizer.hasMoreTokens()){
+                int rightPage = Integer.parseInt(tokenizer.nextToken());
+                context.write(new IntWritable(leftPage), new IntWritable(rightPage));
+            }
             //TODO
             //context.write(<IntWritable>, <IntWritable>); // pass this output to reducer
         }
     }
 
     public static class OrphanPageReduce extends Reducer<IntWritable, IntWritable, IntWritable, NullWritable> {
+        private TreeSet<Integer> rightPageSet = new TreeSet<>();
+        private TreeSet<Integer> leftPageSet = new TreeSet<>();
         @Override
         public void reduce(IntWritable key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException {
-            //TODO
-            //context.write(<IntWritable>, <NullWritable>); // print as final output
+            leftPageSet.add(key.get());
+            for(IntWritable page: values){
+                if(page.get() != key.get()){
+                    rightPageSet.add(page.get());
+                }
+            }
+        }
+
+        @Override
+        protected void cleanup(Context context) throws IOException, InterruptedException {
+            leftPageSet.removeAll(rightPageSet);
+            for (Integer i : leftPageSet) {
+                context.write(new IntWritable(i), NullWritable.get());
+            }
         }
     }
 }

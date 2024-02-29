@@ -1,0 +1,28 @@
+hadoop jar TopTitleStatistics.jar TopTitleStatistics -D stopwords=/etc/apt/stopwords.txt -D delimiters=/etc/apt/delimiters.txt /etc/apt/dataset/titles ./temp-output
+
+
+hadoop jar OrphanPages.jar OrphanPages  /etc/apt/dataset/links ./temp-output
+
+hadoop jar TopPopularLinks.jar TopPopularLinks  /etc/apt/dataset/links ./temp-output
+
+hadoop jar PopularityLeague.jar PopularityLeague -D league=/etc/apt/dataset/league.txt /etc/apt/dataset/links ./temp-output
+
+
+jar -cvf PopularityLeague.jar -C /PopularityLeague/ ./
+
+hadoop com.sun.tools.javac.Main PopularityLeague.java -d /PopularityLeague/
+
+hadoop com.sun.tools.javac.Main OrphanPages.java -d /OrphanPages/
+
+jar -cvf OrphanPages.jar -C /OrphanPages/ ./
+
+hadoop com.sun.tools.javac.Main TopPopularLinks.java -d /TopPopularLinks/
+
+jar -cvf TopPopularLinks.jar -C /TopPopularLinks/ ./
+
+curl -o dataset.json "https://d3c33hcgiwev3.cloudfront.net/uFWKSwhfT2enr0EVffpOew_a823ebc721024c15ba23bf94b79da2f1_yelp_academic_dataset_review_sampled.json?Expires=1709078400"
+
+hadoop com.sun.tools.javac.Main TopReview.java -d /TopReview/
+
+
+jar -cvf TopReview.jar -C /TopReview/ ./

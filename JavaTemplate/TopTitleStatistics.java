@@ -5,10 +5,7 @@ import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.io.ArrayWritable;
-import org.apache.hadoop.io.IntWritable;
-import org.apache.hadoop.io.NullWritable;
-import org.apache.hadoop.io.Text;
+import org.apache.hadoop.io.*;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.Reducer;
@@ -23,10 +20,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.lang.Integer;
-import java.util.Arrays;
-import java.util.List;
-import java.util.StringTokenizer;
-import java.util.TreeSet;
+import java.util.*;
 
 public class TopTitleStatistics extends Configured implements Tool {
     public static final Log LOG = LogFactory.getLog(TopTitleStatistics.class);
@@ -128,20 +122,37 @@ public class TopTitleStatistics extends Configured implements Tool {
         public void map(Object key, Text value, Context context) throws IOException, InterruptedException {
             //TODO
             //context.write(<Text>, <IntWritable>); // pass this output to reducer
+            String line = value.toString();
+            StringTokenizer tokenizer = new StringTokenizer(line, delimiters);
+            while (tokenizer.hasMoreTokens()) {
+                String token = tokenizer.nextToken().toLowerCase();
+                List<String> words =  new ArrayList<>(Arrays.asList(token.split("\\s+")));
+                words.removeAll(stopWords);
+                for(String word: words){
+                    context.write(new Text(word),new IntWritable(1));
+                }
+            }
         }
     }
 
     public static class TitleCountReduce extends Reducer<Text, IntWritable, Text, IntWritable> {
+        private IntWritable result = new IntWritable();
         @Override
         public void reduce(Text key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException {
             //TODO
+            int sum = 0;
+            for (IntWritable val : values) {
+                sum += val.get();
+            }
+            result.set(sum);
+            context.write(key, result);
             //context.write(<Text>, <IntWritable>); // pass this output to TopTitlesStatMap mapper
         }
     }
 
     public static class TopTitlesStatMap extends Mapper<Text, Text, NullWritable, TextArrayWritable> {
         //TODO
-
+        private TreeSet<Pair<Integer, String>> countToWordMap = new TreeSet<>();
         @Override
         protected void setup(Context context) throws IOException,InterruptedException {
             Configuration conf = context.getConfiguration();
@@ -150,11 +161,22 @@ public class TopTitleStatistics extends Configured implements Tool {
         @Override
         public void map(Text key, Text value, Context context) throws IOException, InterruptedException {
             //TODO
+            int count = Integer.parseInt(value.toString());
+            String word = key.toString();
+            countToWordMap.add(Pair.of(count,word));
+            if(countToWordMap.size() > 10){
+                countToWordMap.remove(countToWordMap.first());
+            }
         }
 
         @Override
         protected void cleanup(Context context) throws IOException, InterruptedException {
             //TODO
+            for (Pair<Integer, String> item : countToWordMap) {
+                String[] strings = {item.second, item.first.toString()};
+                TextArrayWritable val = new TextArrayWritable(strings);
+                context.write(NullWritable.get(), val);
+            }
             //Cleanup operation starts after all mappers are finished
             //context.write(<NullWritable>, <TextArrayWritable>); // pass this output to reducer
         }
@@ -162,7 +184,7 @@ public class TopTitleStatistics extends Configured implements Tool {
 
     public static class TopTitlesStatReduce extends Reducer<NullWritable, TextArrayWritable, Text, IntWritable> {
         //TODO
-
+        private List<Integer> numberList = new ArrayList<>();
         @Override
         protected void setup(Context context) throws IOException,InterruptedException {
             Configuration conf = context.getConfiguration();
@@ -170,8 +192,30 @@ public class TopTitleStatistics extends Configured implements Tool {
 
         @Override
         public void reduce(NullWritable key, Iterable<TextArrayWritable> values, Context context) throws IOException, InterruptedException {
-            Integer sum, mean, max, min, var;
-            //TODO
+            Integer sum = 0, mean = 0, max = 0, min = Integer.MAX_VALUE, var = 0;
+            for (TextArrayWritable val : values) {
+                Writable[] writableArray = val.get();
+                Text[] pair = new Text[writableArray.length];
+                for (int i = 0; i < writableArray.length; i++) {
+                    pair[i] = (Text) writableArray[i];
+                }
+                String word = pair[0].toString();
+                Integer count = Integer.parseInt(pair[1].toString());
+                sum += count;
+                if(min > count){
+                    min = count;
+                }
+                if(count > max) {
+                    max = count;
+                }
+                numberList.add(count);
+            }
+            mean = sum/numberList.size();
+
+            for(Integer num: numberList){
+                var += (int) Math.round(Math.pow((num - mean), 2));
+            }
+            var = var/numberList.size();
 
             context.write(new Text("Mean"), new IntWritable(mean));
             context.write(new Text("Sum"), new IntWritable(sum));

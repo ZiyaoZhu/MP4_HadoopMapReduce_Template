@@ -1,3 +1,5 @@
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.FSDataInputStream;
@@ -9,73 +11,86 @@ import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.Reducer;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.apache.hadoop.mapreduce.lib.input.KeyValueTextInputFormat;
+import org.apache.hadoop.mapreduce.lib.input.TextInputFormat;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
+import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.util.*;
+import java.util.Arrays;
+import java.util.List;
+import java.util.StringTokenizer;
+import java.util.TreeSet;
 
-public class TopTitles extends Configured implements Tool {
+public class TopReviews extends Configured implements Tool {
+    public static final Log LOG = LogFactory.getLog(TopReviews.class);
 
     public static void main(String[] args) throws Exception {
-        int res = ToolRunner.run(new Configuration(), new TopTitles(), args);
+        int res = ToolRunner.run(new Configuration(), new TopReviews(), args);
         System.exit(res);
     }
 
     @Override
     public int run(String[] args) throws Exception {
         Configuration conf = this.getConf();
+
         FileSystem fs = FileSystem.get(conf);
-        Path tmpPath = new Path("./tmp");
+        Path tmpPath = new Path("/temp/preF-output");
         fs.delete(tmpPath, true);
 
-        Job jobA = Job.getInstance(conf, "Title Count");
+        // Job1
+        Job jobA = Job.getInstance(conf, "Review Count");
         jobA.setOutputKeyClass(Text.class);
         jobA.setOutputValueClass(IntWritable.class);
 
-        jobA.setMapperClass(TitleCountMap.class);
-        jobA.setReducerClass(TitleCountReduce.class);
+        jobA.setMapperClass(ReviewCountMap.class);
+        jobA.setReducerClass(ReviewCountReduce.class);
 
-        FileInputFormat.setInputPaths(jobA, new Path(args[0]));
+        jobA.setInputFormatClass(TextInputFormat.class);
+        jobA.setOutputFormatClass(TextOutputFormat.class);
+
         FileOutputFormat.setOutputPath(jobA, tmpPath);
+        FileInputFormat.setInputPaths(jobA, new Path(args[0]));
 
-        jobA.setJarByClass(TopTitles.class);
+        jobA.setJarByClass(TopReviews.class);
+
         jobA.waitForCompletion(true);
 
-        Job jobB = Job.getInstance(conf, "Top Titles");
-        jobB.setOutputKeyClass(Text.class);
-        jobB.setOutputValueClass(IntWritable.class);
+        // Job2
+        Job jobB = Job.getInstance(conf, "Top Reviews");
+        jobB.setOutputKeyClass(NullWritable.class);
+        jobB.setOutputValueClass(TextArrayWritable.class);
 
         jobB.setMapOutputKeyClass(NullWritable.class);
         jobB.setMapOutputValueClass(TextArrayWritable.class);
 
-        jobB.setMapperClass(TopTitlesMap.class);
-        jobB.setReducerClass(TopTitlesReduce.class);
-        jobB.setNumReduceTasks(1);
-
-        FileInputFormat.setInputPaths(jobB, tmpPath);
-        FileOutputFormat.setOutputPath(jobB, new Path(args[1]));
+        jobB.setMapperClass(TopReviewsMap.class);
+        jobB.setReducerClass(TopReviewsReduce.class);
 
         jobB.setInputFormatClass(KeyValueTextInputFormat.class);
         jobB.setOutputFormatClass(TextOutputFormat.class);
 
-        jobB.setJarByClass(TopTitles.class);
+        FileInputFormat.setInputPaths(jobB, tmpPath);
+        FileOutputFormat.setOutputPath(jobB, new Path(args[1]));
+
+        jobB.setJarByClass(TopReviews.class);
+
         return jobB.waitForCompletion(true) ? 0 : 1;
     }
 
-    public static String readHDFSFile(String path, Configuration conf) throws IOException {
-        Path pt = new Path(path);
+    public static String readHDFSFile(String path, Configuration conf) throws IOException{
+        Path pt=new Path(path);
         FileSystem fs = FileSystem.get(pt.toUri(), conf);
         FSDataInputStream file = fs.open(pt);
-        BufferedReader buffIn = new BufferedReader(new InputStreamReader(file));
+        BufferedReader buffIn=new BufferedReader(new InputStreamReader(file));
 
         StringBuilder everything = new StringBuilder();
         String line;
-        while ((line = buffIn.readLine()) != null) {
+        while( (line = buffIn.readLine()) != null) {
             everything.append(line);
             everything.append("\n");
         }
@@ -97,12 +112,12 @@ public class TopTitles extends Configured implements Tool {
         }
     }
 
-    public static class TitleCountMap extends Mapper<Object, Text, Text, IntWritable> {
+    public static class ReviewCountMap extends Mapper<Object, Text, Text, IntWritable> {
         List<String> stopWords;
         String delimiters;
 
         @Override
-        protected void setup(Context context) throws IOException, InterruptedException {
+        protected void setup(Context context) throws IOException,InterruptedException {
 
             Configuration conf = context.getConfiguration();
 
@@ -113,102 +128,102 @@ public class TopTitles extends Configured implements Tool {
             this.delimiters = readHDFSFile(delimitersPath, conf);
         }
 
-
         @Override
         public void map(Object key, Text value, Context context) throws IOException, InterruptedException {
-            String line = value.toString();
-            StringTokenizer tokenizer = new StringTokenizer(line, delimiters);
-            while (tokenizer.hasMoreTokens()) {
-                String token = tokenizer.nextToken().toLowerCase();
-                List<String> words =  new ArrayList<>(Arrays.asList(token.split("\\s+")));
-                words.removeAll(stopWords);
-                for(String word: words){
-                    context.write(new Text(word),new IntWritable(1));
+            JSONObject review = new JSONObject(value.toString());
+            String business_id = review.getString("business_id");
+            int stars = review.getInt("stars");
+            String text = review.getString("text");
+            double stars_adjusted = stars - 3;
+            StringTokenizer itr = new StringTokenizer(text, this.delimiters);
+            int length = itr.countTokens();
+
+            while (itr.hasMoreTokens()) {
+                String word = itr.nextToken().toLowerCase();
+                if (this.stopWords.contains(word)) {
+                    length--;
                 }
             }
-            //context.write(<Text>, <IntWritable>); // pass this output to reducer
+            context.write(new Text(business_id), new IntWritable(Math.toIntExact(Math.round(length * stars_adjusted))));
         }
     }
 
-    public static class TitleCountReduce extends Reducer<Text, IntWritable, Text, IntWritable> {
-        private IntWritable result = new IntWritable();
+    public static class ReviewCountReduce extends Reducer<Text, IntWritable, Text, DoubleWritable> {
         @Override
         public void reduce(Text key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException {
             int sum = 0;
+            int count = 0;
             for (IntWritable val : values) {
                 sum += val.get();
+                count++;
             }
-            result.set(sum);
-            context.write(key, result);
-            //context.write(<Text>, <IntWritable>); // pass this output to TopTitlesMap mapper
+            context.write(key, new DoubleWritable((double) sum / count));
         }
     }
 
-    public static class TopTitlesMap extends Mapper<Text, Text, NullWritable, TextArrayWritable> {
-        //TODO
-        private TreeSet<Pair<Integer, String>> countToWordMap = new TreeSet<>();
+    public static class TopReviewsMap extends Mapper<Text, Text, NullWritable, TextArrayWritable> {
+        private TreeSet<Pair<Double, String>> countToReviewMap = new TreeSet<Pair<Double, String>>();
+        Integer N;
+
         @Override
-        protected void setup(Context context) throws IOException, InterruptedException {
+        protected void setup(Context context) throws IOException,InterruptedException {
             Configuration conf = context.getConfiguration();
+            this.N = conf.getInt("N", 10);
         }
 
         @Override
         public void map(Text key, Text value, Context context) throws IOException, InterruptedException {
-            int count = Integer.parseInt(value.toString());
-            String word = key.toString();
-            countToWordMap.add(Pair.of(count,word));
-            if(countToWordMap.size() > 10){
-                countToWordMap.remove(countToWordMap.first());
+            double average = Double.parseDouble(value.toString());
+            countToReviewMap.add(new Pair<Double, String>(average, key.toString()));
+            if (countToReviewMap.size() > this.N) {
+                countToReviewMap.remove(countToReviewMap.first());
             }
         }
 
         @Override
         protected void cleanup(Context context) throws IOException, InterruptedException {
-            for (Pair<Integer, String> item : countToWordMap) {
+            for (Pair<Double, String> item : countToReviewMap) {
                 String[] strings = {item.second, item.first.toString()};
-                TextArrayWritable val = new TextArrayWritable(strings);
-                context.write(NullWritable.get(), val);
+                context.write(NullWritable.get(), new TextArrayWritable(strings));
             }
-
-            //Cleanup operation starts after all mappers are finished
-            //context.write(<NullWritable>, <TextArrayWritable>); // pass this output to reducer
         }
     }
 
-    public static class TopTitlesReduce extends Reducer<NullWritable, TextArrayWritable, Text, IntWritable> {
-        // TODO
-        private TreeSet<Pair<Integer, String>> countToWordMap = new TreeSet<>();
+    public static class TopReviewsReduce extends Reducer<NullWritable, TextArrayWritable, Text, NullWritable> {
+        private TreeSet<Pair<Double, String>> countToReviewMap = new TreeSet<Pair<Double, String>>();
+        Integer N;
+
         @Override
-        protected void setup(Context context) throws IOException, InterruptedException {
+        protected void setup(Context context) throws IOException,InterruptedException {
             Configuration conf = context.getConfiguration();
+            this.N = conf.getInt("N", 10);
         }
 
         @Override
         public void reduce(NullWritable key, Iterable<TextArrayWritable> values, Context context) throws IOException, InterruptedException {
             for (TextArrayWritable val : values) {
-                Writable[] writableArray = val.get();
-                Text[] pair = new Text[writableArray.length];
-                for (int i = 0; i < writableArray.length; i++) {
-                    pair[i] = (Text) writableArray[i];
+                Writable[] writables = val.get();
+                Text[] pair = new Text[writables.length];
+                for(int i = 0; i < writables.length ; i++){
+                    pair[i] = (Text)writables[i];
                 }
-                String word = pair[0].toString();
-                Integer count = Integer.parseInt(pair[1].toString());
-                countToWordMap.add(new Pair<Integer, String>(count, word));
-                if (countToWordMap.size() > 10) {
-                    countToWordMap.remove(countToWordMap.first());
+                String business_id = pair[0].toString();
+                double average = Double.parseDouble(pair[1].toString());
+                countToReviewMap.add(new Pair<Double, String>(average, business_id));
+                if (countToReviewMap.size() > this.N) {
+                    countToReviewMap.remove(countToReviewMap.first());
                 }
             }
 
-            for (Pair<Integer, String> item : countToWordMap) {
-                Text word = new Text(item.second);
-                IntWritable value = new IntWritable(item.first);
-                context.write(word, value);
+            for (Pair<Double, String> item : countToReviewMap) {
+                Text business_id = new Text(item.second);
+                context.write(business_id, NullWritable.get());
             }
-            //context.write(<Text>, <IntWritable>); // print as final output
         }
     }
-}
 
+    // Pair class and other necessary classes
+}
 class Pair<A extends Comparable<? super A>,
         B extends Comparable<? super B>>
         implements Comparable<Pair<A, B>> {
